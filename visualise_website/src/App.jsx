@@ -42,9 +42,10 @@ function MovementSketch({ positions }) {
       let zoom = 1.0;
       let lastMouseX, lastMouseY;
       let currentPositions = []; // Store positions locally
+      const scaleFactor = 10; // Adjust this value to scale the visualization
 
       p.setup = () => {
-        p.createCanvas(p.windowWidth / 2.2, 550, p.WEBGL);
+        p.createCanvas(p.windowWidth / 2.5, 400, p.WEBGL);
         currentPositions = positions;
       };
 
@@ -88,26 +89,7 @@ function MovementSketch({ positions }) {
         p.rotateX(rotX);
         p.rotateY(rotY);
 
-        // --- Dynamic Scaling ---
-        let maxExtent = 0;
-        for (const pos of currentPositions) {
-            const extent = Math.max(Math.abs(pos.x), Math.abs(pos.y), Math.abs(pos.z));
-            if (extent > maxExtent) {
-                maxExtent = extent;
-            }
-        }
-
-        const desiredSize = 100; // Fit path within this size relative to axes
-        const defaultScale = 10;   // Use this zoom for small movements
-        let dynamicScale;
-
-        if (maxExtent < desiredSize / defaultScale) { // If path is small
-            dynamicScale = defaultScale;
-        } else { // If path is large, scale it down to fit
-            dynamicScale = desiredSize / maxExtent;
-        }
-
-        // Draw axes (these do not scale with the path)
+        // Draw axes
         p.push();
         p.strokeWeight(1);
         p.stroke(255, 0, 0, 150); // X-axis
@@ -118,7 +100,6 @@ function MovementSketch({ positions }) {
         p.line(0, 0, 0, 0, 0, 150);
         p.pop();
         
-        // Draw the scaled path
         p.stroke(255, 255, 255, 200);
         p.strokeWeight(2);
         p.noFill();
@@ -127,9 +108,13 @@ function MovementSketch({ positions }) {
           const pos1 = currentPositions[i];
           const pos2 = currentPositions[i+1];
           p.line(
-            pos1.x * dynamicScale, pos1.y * dynamicScale, pos1.z * dynamicScale,
-            pos2.x * dynamicScale, pos2.y * dynamicScale, pos2.z * dynamicScale
-            );
+            pos1.x * scaleFactor,
+            pos1.y * scaleFactor,
+            pos1.z * scaleFactor,
+            pos2.x * scaleFactor,
+            pos2.y * scaleFactor,
+            pos2.z * scaleFactor,
+          );
         }
       };
     }
