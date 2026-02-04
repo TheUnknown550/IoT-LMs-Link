@@ -1,4 +1,4 @@
-import json
+﻿import json
 import random
 import time
 from datetime import datetime, timezone
@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from collections import deque
+from pydantic import BaseModel
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,21 +19,23 @@ LOG_DEQUE = deque(maxlen=300)
 # --- Mocked Data Generation ---
 
 # Store the target location for the GOTO function
-target_location = {"x": 0.0, "y": 0.0, "z": 0.0}
-current_position = {"x": 10.0, "y": 10.0, "z": 10.0}
+target_location = None
+current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
 
 def generate_sensor_data():
     """Generates a dictionary of random sensor data."""
     global current_position
-    # Move current position towards target
-    for axis in ["x", "y", "z"]:
-        if abs(current_position[axis] - target_location[axis]) > 0.1:
-            if current_position[axis] < target_location[axis]:
-                current_position[axis] += 0.1
-            elif current_position[axis] > target_location[axis]:
-                current_position[axis] -= 0.1
-        # Add some random jitter
-        current_position[axis] += random.uniform(-0.05, 0.05)
+    
+    if target_location:
+        # Move current position towards target
+        for axis in ["x", "y", "z"]:
+            if abs(current_position[axis] - target_location[axis]) > 0.1:
+                if current_position[axis] < target_location[axis]:
+                    current_position[axis] += 1
+                elif current_position[axis] > target_location[axis]:
+                    current_position[axis] -= 1
+            # Add some random jitter
+            current_position[axis] += random.uniform(-0.5, 0.5)
 
 
     return {
@@ -51,18 +54,17 @@ def generate_sensor_data():
 
 MockedArduinoMCP = FastMCP('Mocked Arduino Server')
 
-@MockedArduinoMCP.tool
+
 def goto_target(x: float, y: float, z: float):
-    """Sets the target coordinates for the mocked device."""
-    global target_location
-    target_location["x"] = x
-    target_location["y"] = y
-    target_location["z"] = z
-    log_message = f"GOTO target set to: x={x}, y={y}, z={z}"
+    """Sets the target coordinates for the mocked device and resets the current position."""
+    global target_location, current_position
+    target_location = {"x": x, "y": y, "z": z}
+    current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
+    log_message = f"GOTO target set to: x={x}, y={y}, z={z}. Position reset to origin."
     logging.info(log_message)
     log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
     LOG_DEQUE.append(log_line)
-    return f"GOTO target set to: x={x}, y={y}, z={z}"
+    return f"GOTO target set to: x={x}, y={y}, z={z}. Position reset."
 
 @MockedArduinoMCP.tool
 def get_sensor_data():
@@ -84,11 +86,12 @@ def get_current_position():
 def data_generation_loop():
     """A loop to continuously generate data in the background and log it."""
     while True:
-        sensor_data = generate_sensor_data()
-        log_message = f"Generated Data: {json.dumps(sensor_data)}"
-        logging.info(log_message)
-        log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
-        LOG_DEQUE.append(log_line)
+        if target_location:
+            sensor_data = generate_sensor_data()
+            log_message = f"Generated Data: {json.dumps(sensor_data)}"
+            logging.info(log_message)
+            log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
+            LOG_DEQUE.append(log_line)
         time.sleep(2.5)
 
 # --- Web Server Setup ---
@@ -107,9 +110,28 @@ def get_logs(limit: int = 300):
     """Returns the last `limit` log lines."""
     return {"lines": list(LOG_DEQUE)}
 
+class GotoCoords(BaseModel):
+    x: float
+    y: float
+    z: float
+
+@app.post("/mcp/goto_target")
+def handle_goto_target(coords: GotoCoords):
+    """API endpoint to set the target coordinates for the mocked device."""
+    # This manually implements the logic of the goto_target tool
+    # to ensure the endpoint works, bypassing the fastmcp http layer.
+    global target_location, current_position
+    target_location = {"x": coords.x, "y": coords.y, "z": coords.z}
+    current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
+    log_message = f"GOTO target set to: x={coords.x}, y={coords.y}, z={coords.z}. Position reset to origin."
+    logging.info(log_message)
+    log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
+    LOG_DEQUE.append(log_line)
+    return f"GOTO target set to: x={coords.x}, y={coords.y}, z={coords.z}. Position reset."
+
 # Mount the MCP server as a sub-application
-mcp_app = MockedArduinoMCP.http_app(path="/mcp")
-app.mount("/mcp", mcp_app)
+# mcp_app = MockedArduinoMCP.http_app()
+# app.mount("/mcp", mcp_app)
 
 
 if __name__ == "__main__":
