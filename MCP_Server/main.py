@@ -1,48 +1,43 @@
-from fastmcp import FastMCP  # This is the MCP Library
-
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
-from urllib.parse import urlparse, parse_qs
 import json
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import queue
 import serial
 import threading
 import time
-from typing import Optional, Callable, Any, Dict, List, Union
+from typing import Optional, Callable, Any, Dict, List
+from collections import deque
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+from pydantic import BaseModel
+from fastmcp import FastMCP
+
+# --- Basic Setup ---
 logger = logging.getLogger("devaiot-mcp")
 logger.setLevel(logging.DEBUG)
+PORT = 'COM5'  # Change to your COM port if different
+LOG_DEQUE = deque(maxlen=300)
 
-PORT = 'COM5'  # Change to your COM port
-LOG_PATH = Path(__file__).parent / "logs" / "mcp.log"
-
-
+# --- Logging Configuration ---
 def configure_logging() -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter("%(asctime)sZ %(levelname)s %(message)s")
-
-    file_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-
 configure_logging()
 
-
+# --- Data Structures ---
 @dataclass(frozen=True)
 class Vec3:
     x: float
     y: float
     z: float
-
 
 @dataclass(frozen=True)
 class ApdsColor:
@@ -51,29 +46,12 @@ class ApdsColor:
     b: int
     c: int
 
-
 @dataclass(frozen=True)
 class SensorPacket:
-    """Represents a single line coming from the Arduino."""
-
     timestamp: datetime
     raw_line: str
     raw_json: Optional[Dict[str, Any]] = None
-    kind: str = "text"  # json | ack | err | text | info
-
-    # Legacy/other sensors
-    hs3003_t_c: Optional[float] = None
-    hs3003_h_rh: Optional[float] = None
-    lps22hb_p_kpa: Optional[float] = None
-    lps22hb_t_c: Optional[float] = None
-    apds_prox: Optional[int] = None
-    apds_color: Optional[ApdsColor] = None
-    apds_gesture: Optional[int] = None  # raw code
-    acc_g: Optional[Vec3] = None
-    gyro_dps: Optional[Vec3] = None
-    mag_uT: Optional[Vec3] = None
-
-    # IoT_Device main.cpp fields
+    kind: str = "text"
     temp_c: Optional[float] = None
     humidity_rh: Optional[float] = None
     position: Optional[Dict[str, Any]] = None
@@ -81,19 +59,19 @@ class SensorPacket:
     ack: Optional[str] = None
     error: Optional[str] = None
     info: Optional[str] = None
+    acc_g: Optional[Vec3] = None
+    gyro_dps: Optional[Vec3] = None
 
+# --- Arduino Communication ---
 
 def _as_vec3(val: Any) -> Optional[Vec3]:
-    """Convert list/tuple to Vec3 if possible."""
     try:
-        if isinstance(val, Vec3):
-            return val
+        if isinstance(val, Vec3): return val
         if isinstance(val, (list, tuple)) and len(val) == 3:
             return Vec3(float(val[0]), float(val[1]), float(val[2]))
     except Exception:
         return None
     return None
-
 
 def _parse_nonjson_line(ts: datetime, line: str) -> SensorPacket:
     if line.startswith("ACK="):
@@ -106,10 +84,8 @@ def _parse_nonjson_line(ts: datetime, line: str) -> SensorPacket:
             except Exception:
                 coords = None
         return SensorPacket(timestamp=ts, raw_line=line, kind="ack", ack=payload, position=coords, info=payload)
-
     if line.startswith("ERR="):
         return SensorPacket(timestamp=ts, raw_line=line, kind="err", error=line[4:], info=line[4:])
-
     if line.lower().startswith("distance to target"):
         dist: Optional[float] = None
         try:
@@ -119,345 +95,210 @@ def _parse_nonjson_line(ts: datetime, line: str) -> SensorPacket:
         except Exception:
             dist = None
         return SensorPacket(timestamp=ts, raw_line=line, kind="info", distance_to_target=dist, info=line)
-
     return SensorPacket(timestamp=ts, raw_line=line, kind="text", info=line)
 
-
 def parse_packet(line: str) -> Optional[SensorPacket]:
-    if line == "":
-        return None
-
+    if not line: return None
     ts = datetime.now(timezone.utc)
     try:
         obj = json.loads(line)
+        if not isinstance(obj, dict):
+            return SensorPacket(timestamp=ts, raw_line=line, raw_json=obj, kind="json")
+        
+        position = obj.get("position") if isinstance(obj.get("position"), dict) else None
+        
+        return SensorPacket(
+            timestamp=ts, raw_line=line, raw_json=obj, kind="json",
+            temp_c=obj.get("temp_c"),
+            humidity_rh=obj.get("humidity_rh"),
+            position=position,
+            distance_to_target=obj.get("distance_to_target"),
+            acc_g=_as_vec3(obj.get("acc_g")),
+            gyro_dps=_as_vec3(obj.get("gyro_dps")),
+        )
     except Exception:
         return _parse_nonjson_line(ts, line)
 
-    if not isinstance(obj, dict):
-        return SensorPacket(timestamp=ts, raw_line=line, raw_json=obj, kind="json")
-
-    position = obj.get("position") if isinstance(obj.get("position"), dict) else None
-
-    return SensorPacket(
-        timestamp=ts,
-        raw_line=line,
-        raw_json=obj,
-        kind="json",
-        hs3003_t_c=obj.get("hs3003_t_c"),
-        hs3003_h_rh=obj.get("hs3003_h_rh") or obj.get("humidity_rh"),
-        lps22hb_p_kpa=obj.get("lps22hb_p_kpa"),
-        lps22hb_t_c=obj.get("lps22hb_t_c"),
-        apds_prox=obj.get("apds_prox"),
-        apds_color=obj.get("apds_color"),
-        apds_gesture=obj.get("apds_gesture"),
-        acc_g=_as_vec3(obj.get("acc_g")),
-        gyro_dps=_as_vec3(obj.get("gyro_dps")),
-        mag_uT=_as_vec3(obj.get("mag_uT")),
-        temp_c=obj.get("temp_c") or obj.get("hs3003_t_c"),
-        humidity_rh=obj.get("humidity_rh") or obj.get("hs3003_h_rh"),
-        position=position,
-        distance_to_target=obj.get("distance_to_target"),
-    )
-
-
 def clear_queue(q: queue.Queue):
-    while True:
+    while not q.empty():
         try:
             q.get_nowait()
             q.task_done()
         except queue.Empty:
             break
 
-
 class Nano33SenseRev2:
-    def __init__(
-        self,
-        port: str,
-        baud: int = 115200,
-        on_packet: Optional[Callable[[SensorPacket], None]] = None,
-        debug_nonjson: bool = False,
-    ):
+    def __init__(self, port: str, baud: int = 115200, on_packet: Optional[Callable[[SensorPacket], None]] = None):
         self.ser = serial.Serial(port, baud, timeout=1)
         self.on_packet = on_packet
-        self.debug_nonjson = debug_nonjson
         self._running = True
-
-        self._latest_pkt = queue.Queue(maxsize=1)
         self._latest_sensor = queue.Queue(maxsize=1)
-
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
 
-    # ----- commands -----
-    def led_on(self) -> None:
-        self._send("LED=ON")
+    def _send(self, msg: str):
+        if not msg.endswith("\n"): msg += "\n"
+        self.ser.write(msg.encode("utf-8"))
 
-    def led_off(self) -> None:
-        self._send("LED=OFF")
-
-    def rgb(self, r: int, g: int, b: int) -> None:
-        r = max(0, min(255, int(r)))
-        g = max(0, min(255, int(g)))
-        b = max(0, min(255, int(b)))
-        self._send("RGB={},{},{}".format(r, g, b))
-
-    def red_LED(self) -> None:
-        self.rgb(255, 0, 0)
-
-    # TODO: Implement blue led
-
-    def yellow_LED(self) -> None:
-        self.rgb(255, 255, 0)
-
-    def off(self) -> None:
-        self.rgb(0, 0, 0)
-
-    def goto(self, x: float, y: float, z: float) -> None:
-        self._send(f"GOTO={x},{y},{z}")
+    def _read_loop(self):
+        while self._running:
+            try:
+                raw = self.ser.readline()
+                if not raw: continue
+                line = raw.decode(errors="replace").strip()
+                if not line: continue
+                
+                pkt = parse_packet(line)
+                if pkt:
+                    if self.on_packet: self.on_packet(pkt)
+                    if pkt.kind == "json":
+                        clear_queue(self._latest_sensor)
+                        self._latest_sensor.put(pkt, block=False)
+            except serial.SerialException as e:
+                logger.error(f"Serial error: {e}")
+                time.sleep(5) # Avoid spamming logs on disconnect
+            except Exception as e:
+                logger.error(f"Error in read loop: {e}")
 
     def get_state(self) -> Optional[SensorPacket]:
         try:
-            value = self._latest_sensor.get(timeout=2)
-            self._latest_sensor.task_done()
-            return value
+            return self._latest_sensor.get(timeout=2)
         except queue.Empty:
             return None
 
-    def get_latest_packet(self) -> Optional[SensorPacket]:
-        try:
-            value = self._latest_pkt.get(timeout=2)
-            self._latest_pkt.task_done()
-            return value
-        except queue.Empty:
-            return None
+    def goto(self, x: float, y: float, z: float):
+        self._send(f"GOTO={x},{y},{z}")
 
-    # ----- internals -----
-    def _send(self, msg: str) -> None:
-        if not msg.endswith("\n"):
-            msg += "\n"
-        self.ser.write(msg.encode("utf-8"))
+    def rgb(self, r: int, g: int, b: int):
+        self._send(f"RGB={r},{g},{b}")
 
-    def _set_latest_package(self, pkt: SensorPacket) -> None:
-        clear_queue(self._latest_pkt)
-        self._latest_pkt.put(pkt, block=False)
-        if pkt.kind == "json":
-            clear_queue(self._latest_sensor)
-            self._latest_sensor.put(pkt, block=False)
+    def red_LED(self): self.rgb(255, 0, 0)
+    def yellow_LED(self): self.rgb(255, 255, 0)
+    def off(self): self.rgb(0, 0, 0)
 
-    def _read_loop(self) -> None:
-        while self._running:
-            raw = self.ser.readline()
-            if not raw:
-                continue
-
-            line = raw.decode(errors="replace").strip()
-            if line == "":
-                continue
-
-            pkt = parse_packet(line)
-            if pkt is not None:
-                if self.on_packet:
-                    self.on_packet(pkt)
-                self._set_latest_package(pkt)
-            else:
-                if self.debug_nonjson:
-                    logger.info("NONJSON: %s", str(line))
-
-    def close(self) -> None:
+    def close(self):
         self._running = False
-        time.sleep(0.1)
-        try:
+        if self.ser and self.ser.is_open:
             self.ser.close()
-        except Exception:
-            pass
 
-
-def _vec_to_list(v: Optional[Vec3]) -> Optional[List[float]]:
-    if isinstance(v, Vec3):
-        return [v.x, v.y, v.z]
-    return v
-
-
-def packet_to_dict(p: SensorPacket) -> Dict[str, Any]:
-    return {
-        "timestamp": p.timestamp.isoformat(),
-        "kind": p.kind,
-        "raw_line": p.raw_line,
-        "raw_json": p.raw_json,
-        "hs3003_t_c": p.hs3003_t_c,
-        "hs3003_h_rh": p.hs3003_h_rh,
-        "lps22hb_p_kpa": p.lps22hb_p_kpa,
-        "lps22hb_t_c": p.lps22hb_t_c,
-        "apds_prox": p.apds_prox,
-        "apds_color": p.apds_color,
-        "apds_gesture": p.apds_gesture,
-        "acc_g": _vec_to_list(p.acc_g),
-        "gyro_dps": _vec_to_list(p.gyro_dps),
-        "mag_uT": _vec_to_list(p.mag_uT),
-        "temp_c": p.temp_c,
-        "humidity_rh": p.humidity_rh,
-        "position": p.position,
-        "distance_to_target": p.distance_to_target,
-        "ack": p.ack,
-        "error": p.error,
-        "info": p.info,
-    }
-
-
+# --- Log Processing ---
 def show(p: SensorPacket) -> None:
-    payload = packet_to_dict(p)
-    logger.info(json.dumps(payload, default=str))
+    log_level = "INFO"
+    message = ""
 
+    if p.kind == 'json':
+        message = f"Generated Data: {p.raw_line}"
+    elif p.kind == 'err':
+        log_level = "ERROR"
+        message = p.error or p.raw_line
+    elif p.kind == 'ack':
+        log_level = "DEBUG"
+        message = p.ack or p.raw_line
+    elif p.info:
+        message = p.info
+    else:
+        message = p.raw_line
 
-def read_tail(path: Path, limit: int = 200) -> List[str]:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except FileNotFoundError:
-        return []
-    return [line.rstrip("\n") for line in lines[-limit:]]
-
-
-class LogRequestHandler(BaseHTTPRequestHandler):
-    def _set_cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self._set_cors()
-        self.end_headers()
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path not in ("/logs", "/logs/"):
-            self.send_response(404)
-            self._set_cors()
-            self.end_headers()
-            return
-
-        qs = parse_qs(parsed.query)
-        try:
-            limit = int(qs.get("limit", ["200"])[0])
-        except Exception:
-            limit = 200
-        limit = max(1, min(limit, 2000))
-
-        body = {"lines": read_tail(LOG_PATH, limit)}
-        encoded = json.dumps(body).encode("utf-8")
-
-        self.send_response(200)
-        self._set_cors()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
-
-    def log_message(self, format, *args):  # noqa: A003
-        # silence default stdout logging for cleanliness
+    if not message or not message.strip():
         return
 
+    # Log to console
+    if log_level == "ERROR": logger.error(message)
+    elif log_level == "DEBUG": logger.debug(message)
+    else: logger.info(message)
+    
+    # Add to UI log deque
+    log_line = f"{p.timestamp.isoformat().replace('+00:00', 'Z')} {log_level} {message}"
+    LOG_DEQUE.append(log_line)
 
-def start_log_http_server(port: int = 8100) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("0.0.0.0", port), LogRequestHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    logger.info("Log endpoint available at http://localhost:%s/logs", port)
-    return server
+# --- FastAPI Web Server ---
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+)
 
+@app.get("/logs")
+def get_logs(limit: int = 300):
+    return {"lines": list(LOG_DEQUE)}
 
-board = Nano33SenseRev2(PORT, on_packet=show, debug_nonjson=True)  # <-- change port if needed
+class GotoCoords(BaseModel):
+    x: float
+    y: float
+    z: float
+
+def set_goto_target(x: float, y: float, z: float) -> str:
+    """Sends GOTO command to the board and logs it."""
+    board.goto(x, y, z)
+    log_message = f"GOTO target set to: x={x}, y={y}, z={z}."
+    logger.info(log_message)
+    log_line = f"{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')} INFO {log_message}"
+    LOG_DEQUE.append(log_line)
+    return f"GOTO target set to: x={x}, y={y}, z={z}."
+
+@app.post("/mcp/goto_target")
+def handle_goto_target(coords: GotoCoords):
+    message = set_goto_target(coords.x, coords.y, coords.z)
+    return {"message": message}
+
+# --- MCP Server and Tools ---
+board = Nano33SenseRev2(PORT, on_packet=show)
 ArduinoMCP = FastMCP('Arduino Servers')
 
-
-# @ArduinoMCP.tool is a python decorator which is wrapping our functions to be exposed to the MCP Client
-
 @ArduinoMCP.tool
-def red_led_ON():
-    '''Turns on red LED in the Arduino'''
-    board.red_LED(); time.sleep(2)
-    board.off()
-    return 'Red LED could not be turned on - except for two seconds'
-
-
-@ArduinoMCP.tool
-def led_OFF():
-    '''Turns off all LEDs in the Arduino'''
-    board.off()
-    return 'All LEDs OFF'
-
-
-@ArduinoMCP.tool
-def goto_target(x: float, y: float, z: float):
-    '''Sets the target coordinates on the Arduino (meters).'''
-    board.goto(x, y, z)
-    return f"GOTO sent: {x}, {y}, {z}"
-
+def goto_target(x: float, y: float, z: float) -> str:
+    """Sets the target coordinates on the Arduino (meters)."""
+    return set_goto_target(x, y, z)
 
 @ArduinoMCP.tool
 def get_current_temperature():
-    '''Gets the most recent temperature from the Arduino'''
+    """Gets the most recent temperature from the Arduino"""
     state = board.get_state()
-    if state:
-        temp = state.temp_c if state.temp_c is not None else state.hs3003_t_c
-        if temp is not None:
-            return f"{temp} degrees celsius"
-    return None
-
+    if state and state.temp_c is not None:
+        return f"{state.temp_c:.2f} degrees celsius"
+    return "Could not retrieve temperature."
 
 @ArduinoMCP.tool
-def get_current_gyro():
-    '''Gets the most recent gyroscope reading from the Arduino'''
+def get_current_humidity():
+    """Gets the most recent humidity from the Arduino"""
     state = board.get_state()
-    if state:
-        return str(state.gyro_dps)
-    else:
-        return None
-
+    if state and state.humidity_rh is not None:
+        return f"{state.humidity_rh:.2f}%"
+    return "Could not retrieve humidity."
 
 @ArduinoMCP.tool
-def get_current_accelerometer():
-    '''Gets the most recent accelerometer reading from the Arduino'''
+def get_current_position():
+    """Gets the most recent position from the Arduino"""
     state = board.get_state()
-    if state:
-        return str(state.acc_g)
-    else:
-        return None
+    if state and state.position:
+        pos = state.position
+        return f"x={pos['x']:.2f}, y={pos['y']:.2f}, z={pos['z']:.2f}"
+    return "Could not retrieve position."
 
-
-# TODO: Implement blue led
-
-
-# Can be used for testing and debugging
-
-def test():
-    '''Gets the most recent temperature from the Arduino'''
-    state = board.get_state()
-    if state:
-        return str(state.acc_g)
-    else:
-        return None
-
-
+# --- Main Execution ---
 if __name__ == "__main__":
-    log_server = None
+    uvicorn_thread = threading.Thread(
+        target=uvicorn.run,
+        args=(app,),
+        kwargs={"host": "0.0.0.0", "port": 8100},
+        daemon=True,
+    )
+    uvicorn_thread.start()
+    logger.info("Web server started. Log endpoint available at http://localhost:8100/logs")
+
     try:
-        log_server = start_log_http_server(port=8100)
-
-        # For demonstrating that Arduino is connected
-        board.red_LED(); time.sleep(1)
-        board.yellow_LED(); time.sleep(1)
+        logger.info("Initializing connection with Arduino...")
+        board.red_LED(); time.sleep(0.5)
+        board.yellow_LED(); time.sleep(0.5)
         board.off()
-
-        # Runs the MCP server
+        logger.info("Arduino Connected. Starting MCP Server.")
+        
         ArduinoMCP.run()
 
-        # If you want to host via http:
-        # ArduinoMCP.run(transport="http", host="127.0.0.1", port=8000)
-    except KeyboardInterrupt:
-        board.close()
+    except (KeyboardInterrupt, serial.SerialException) as e:
+        if isinstance(e, serial.SerialException):
+            logger.error(f"Could not connect to Arduino on {PORT}. Please check the port and connection.")
+        else:
+            logger.info("Shutting down...")
     finally:
         board.close()
-        if log_server:
-            log_server.shutdown()
