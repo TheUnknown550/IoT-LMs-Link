@@ -69,15 +69,12 @@ function App() {
   const { lines, loading, error, lastUpdated, refresh } = useLogs(url);
 
   const [gotoCoords, setGotoCoords] = useState({ x: 0, y: 0, z: 0 });
-  const [positions, setPositions] = useState([]);
-  const [temperature, setTemperature] = useState(0);
-  const [humidity, setHumidity] = useState(0);
   const [heatmapMode, setHeatmapMode] = useState('temp'); // 'temp' or 'humidity'
 
 
   const parsed = useMemo(() => lines.map(parseLine), [lines]);
 
-  useEffect(() => {
+  const positions = useMemo(() => {
     const newPositions = [];
     const dataRegex = /POSITION x=([\d.-]+),\s*y=([\d.-]+),\s*z=([\d.-]+)\s*\|\s*TEMP=([\d.-]+)C\s*\|\s*HUMIDITY=([\d.-]+)%/;
 
@@ -101,12 +98,7 @@ function App() {
       }
     });
 
-    if (newPositions.length > 0) {
-      const lastPos = newPositions[newPositions.length - 1];
-      if (lastPos.temp) setTemperature(lastPos.temp);
-      if (lastPos.humidity) setHumidity(lastPos.humidity);
-    }
-    setPositions(newPositions);
+    return newPositions;
   }, [lines]);
 
   const handleGotoChange = (e) => {
