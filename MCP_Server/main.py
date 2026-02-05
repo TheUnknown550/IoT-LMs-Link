@@ -180,11 +180,21 @@ def show(p: SensorPacket) -> None:
     message = ""
 
     if p.kind == 'json':
+        parts = []
         if p.position:
             pos = p.position
-            message = f"POSITION x={pos.get('x', 0):.2f}, y={pos.get('y', 0):.2f}, z={pos.get('z', 0):.2f}"
-        else:
-            return
+            parts.append(f"POSITION x={pos.get('x', 0):.2f}, y={pos.get('y', 0):.2f}, z={pos.get('z', 0):.2f} | ")
+        
+        if p.temp_c is not None:
+            parts.append(f"TEMP={p.temp_c:.1f}C | ")
+            
+        if p.humidity_rh is not None:
+            parts.append(f"HUMIDITY={p.humidity_rh:.1f}% | ")
+
+        if not parts:
+            return # Don't log if there's no data
+            
+        message = " ".join(parts)
     elif p.kind == 'err':
         log_level = "ERROR"
         message = p.error or p.raw_line
