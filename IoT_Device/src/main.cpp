@@ -26,6 +26,7 @@ bool hasTarget = false;
 float target_x = 0.0, target_y = 0.0, target_z = 0.0;
 bool targetReached = false;
 unsigned long targetReachedTime = 0;
+bool firstCall = true;
 
 String cmd;
 
@@ -50,6 +51,12 @@ float distanceToTarget() {
 void updatePosition() {
   // Only track position when there's an active target
   if (!hasTarget || targetReached) return;
+
+  if (firstCall) {
+    lastGyroUpdate = micros();
+    firstCall = false;
+    return;
+  }
   
   if (!IMU.gyroscopeAvailable()) return;
   
@@ -58,6 +65,7 @@ void updatePosition() {
   
   unsigned long now = micros();
   float dt = (now - lastGyroUpdate) / 1000000.0;
+  // float dt = 0.01;
   lastGyroUpdate = now;
   
   // Convert gyro readings to radians
@@ -73,18 +81,19 @@ void updatePosition() {
   float dist_horizontal = SPEED * dt * cos(pitch);
   float dist_x = dist_horizontal * cos(yaw);
   float dist_y = dist_horizontal * sin(yaw);
-  
+
   // Update position
   pos_x += dist_x;
   pos_y += dist_y;
   pos_z += dist_z;
   
   // Check if target reached
-  if (hasTarget && !targetReached) {
+  if (hasTarget && !targetReached) { 
     float distance = distanceToTarget();
-    Serial.print("Distance to target: ");
-    Serial.print(distance);
-    Serial.println(" m");
+    // Serial.print("Distance to target: ");
+    // Serial.print(distance);
+    // Serial.println(" m");    Serial.print("Movement: x=");
+
     
     if (distance <= TARGET_THRESHOLD) {
       targetReached = true;
@@ -190,6 +199,7 @@ void loop() {
   
   // Check if LED should be turned off after target reached
   if (targetReached) {
+    firstCall = true;
     unsigned long now = millis();
     if (now - targetReachedTime >= LED_ON_DURATION) {
       rgbOff();

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+﻿from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import logging
@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 # --- Basic Setup ---
 logger = logging.getLogger("devaiot-mcp")
 logger.setLevel(logging.DEBUG)
-PORT = 'COM5'  # Change to your COM port if different
+PORT = 'COM7'  # Change to your COM port if different
 LOG_DEQUE = deque(maxlen=300)
 
 # --- Logging Configuration ---
@@ -73,7 +73,7 @@ def _as_vec3(val: Any) -> Optional[Vec3]:
         return None
     return None
 
-def _parse_nonjson_line(ts: datetime, line: str) -> SensorPacket:
+def _parse_nonjson_line(ts: datetime, line: str) -> Optional[SensorPacket]:
     if line.startswith("ACK="):
         payload = line[4:]
         coords: Optional[Dict[str, float]] = None
@@ -87,14 +87,7 @@ def _parse_nonjson_line(ts: datetime, line: str) -> SensorPacket:
     if line.startswith("ERR="):
         return SensorPacket(timestamp=ts, raw_line=line, kind="err", error=line[4:], info=line[4:])
     if line.lower().startswith("distance to target"):
-        dist: Optional[float] = None
-        try:
-            after_colon = line.split(":", 1)[1]
-            num_part = after_colon.strip().split(" ")[0]
-            dist = float(num_part)
-        except Exception:
-            dist = None
-        return SensorPacket(timestamp=ts, raw_line=line, kind="info", distance_to_target=dist, info=line)
+        return None
     return SensorPacket(timestamp=ts, raw_line=line, kind="text", info=line)
 
 def parse_packet(line: str) -> Optional[SensorPacket]:
@@ -187,7 +180,11 @@ def show(p: SensorPacket) -> None:
     message = ""
 
     if p.kind == 'json':
-        message = f"Generated Data: {p.raw_line}"
+        if p.position:
+            pos = p.position
+            message = f"POSITION x={pos.get('x', 0):.2f}, y={pos.get('y', 0):.2f}, z={pos.get('z', 0):.2f}"
+        else:
+            return
     elif p.kind == 'err':
         log_level = "ERROR"
         message = p.error or p.raw_line
@@ -232,14 +229,14 @@ def set_goto_target(x: float, y: float, z: float) -> str:
     board.goto(x, y, z)
     log_message = f"GOTO target set to: x={x}, y={y}, z={z}."
     logger.info(log_message)
-    log_line = f"{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')} INFO {log_message}"
-    LOG_DEQUE.append(log_line)
+    # log_line = f"{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')} INFO {log_message}"
+    # LOG_DEQUE.append(log_line)
     return f"GOTO target set to: x={x}, y={y}, z={z}."
 
 @app.post("/mcp/goto_target")
 def handle_goto_target(coords: GotoCoords):
     message = set_goto_target(coords.x, coords.y, coords.z)
-    return {"message": message}
+    return {"message": message, "x": coords.x, "y": coords.y, "z": coords.z}
 
 # --- MCP Server and Tools ---
 board = Nano33SenseRev2(PORT, on_packet=show)
