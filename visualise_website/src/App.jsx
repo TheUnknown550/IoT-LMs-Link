@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import MovementSketch from "./MovementSketch";
+import HeatmapPanel from "./HeatmapPanel";
 
 const FALLBACK_URL = "http://localhost:8100/logs?limit=300";
 
@@ -157,39 +158,42 @@ function App() {
           )}
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="rounded-2xl border border-slate-200 bg-white/70 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 text-sm text-slate-600">
-              <span>{loading ? 'Loading…' : `${parsed.length} lines`}</span>
-              <span className="text-slate-500">Auto-refresh every 2.5s</span>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[calc(100vh-280px)]">
+          <div className="flex flex-col gap-6 h-full min-h-0">
+            <div className="rounded-2xl border border-slate-200 bg-white/70 shadow-2xl flex flex-col flex-1 overflow-hidden min-h-0">
+              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 text-sm text-slate-600 flex-shrink-0">
+                <span>{loading ? 'Loading…' : `${parsed.length} lines`}</span>
+                <span className="text-slate-500">Auto-refresh every 2.5s</span>
+              </div>
 
-            <div className="h-[70vh] overflow-y-auto divide-y divide-slate-200 font-mono text-sm">
-              {parsed.length === 0 && !loading ? (
-                <div className="p-4 text-slate-500">No log lines yet.</div>
-              ) : (
-                [...parsed].reverse().map((line, idx) => {
-                  const level = line.level || 'INFO'
-                  return (
-                    <div
-                      key={`${line.timestamp}-${idx}`}
-                      className="flex gap-3 px-4 py-2 hover:bg-slate-200/40"
-                    >
-                      <div className="w-36 shrink-0 text-xs text-slate-500">{line.timestamp}</div>
-                      <span
-                        className={`inline-flex h-6 min-w-16 items-center justify-center rounded-full px-2 text-xs font-semibold ${levelBg[level] || levelBg.INFO
-                          } ${levelColors[level] || levelColors.INFO}`}
+              <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-200 font-mono text-sm overflow-x-hidden">
+                {parsed.length === 0 && !loading ? (
+                  <div className="p-4 text-slate-500">No log lines yet.</div>
+                ) : (
+                  [...parsed].reverse().map((line, idx) => {
+                    const level = line.level || 'INFO'
+                    return (
+                      <div
+                        key={`${line.timestamp}-${idx}`}
+                        className="flex gap-3 px-4 py-2 hover:bg-slate-200/40"
                       >
-                        {level}
-                      </span>
-                      <div className="flex-1 whitespace-pre-wrap break-words text-slate-800">{line.message}</div>
-                    </div>
-                  )
-                })
-              )}
+                        <div className="w-36 shrink-0 text-xs text-slate-500">{line.timestamp}</div>
+                        <span
+                          className={`inline-flex h-6 min-w-16 items-center justify-center rounded-full px-2 text-xs font-semibold ${levelBg[level] || levelBg.INFO
+                            } ${levelColors[level] || levelColors.INFO}`}
+                        >
+                          {level}
+                        </span>
+                        <div className="flex-1 whitespace-pre-wrap break-words text-slate-800">{line.message}</div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
             </div>
+            <HeatmapPanel positions={positions} />
           </div>
-          <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-6 h-full">
             <div className="rounded-2xl border border-slate-200 bg-white/70 shadow-2xl p-4">
               <h2 className="text-xl font-semibold mb-4">GOTO Control</h2>
               <form onSubmit={handleGotoSubmit} className="flex items-end gap-2">
