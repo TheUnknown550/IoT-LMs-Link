@@ -34,16 +34,16 @@ function parseLine(line) {
   };
 }
 
-function MovementSketch({ positions, gotoCoords }) {
+function MovementSketch({ positions, gotoCoords, heatmapMode }) {
   const sketch = useMemo(() => {
-    // Helper function to map temperature to a color
-    function getTempColor(p, temp, minTemp, maxTemp) {
-      if (temp === undefined) {
+    // Helper function to map a value to a color
+    function getHeatmapColor(p, value, min, max) {
+      if (value === undefined) {
         return p.color(20, 20, 20, 200); // Default color for missing data
       }
-      const tempMap = p.constrain(temp, minTemp, maxTemp);
-      const r = p.map(tempMap, minTemp, maxTemp, 50, 255);
-      const b = p.map(tempMap, minTemp, maxTemp, 255, 50);
+      const valueMap = p.constrain(value, min, max);
+      const r = p.map(valueMap, min, max, 50, 255);
+      const b = p.map(valueMap, min, max, 255, 50);
       return p.color(r, 100, b, 200);
     }
 
@@ -68,6 +68,7 @@ function MovementSketch({ positions, gotoCoords }) {
         if (props.gotoCoords) {
           currentGoto = props.gotoCoords;
         }
+        // heatmapMode is a string, so it's fine without a deep copy/check
       };
 
       p.mousePressed = () => {
@@ -107,19 +108,20 @@ function MovementSketch({ positions, gotoCoords }) {
         // Draw axes
         p.push();
         p.strokeWeight(1);
-        p.stroke(255, 0, 0, 150); // X-axis
-        p.line(0, 0, 0, 150, 0, 0);
-        p.stroke(0, 255, 0, 150); // Y-axis
-        p.line(0, 0, 0, 0, 150, 0);
-        p.stroke(0, 0, 255, 150); // Z-axis
-        p.line(0, 0, 0, 0, 0, 150);
+        p.stroke(255, 0, 0, 150); p.line(0, 0, 0, 150, 0, 0);
+        p.stroke(0, 255, 0, 150); p.line(0, 0, 0, 0, 150, 0);
+        p.stroke(0, 0, 255, 150); p.line(0, 0, 0, 0, 0, 150);
         p.pop();
         
         p.noFill();
         
-        const temperatures = currentPositions.map(p => p.temp).filter(t => t !== undefined);
-        const minTemp = temperatures.length > 0 ? Math.min(...temperatures) : 15;
-        const maxTemp = temperatures.length > 0 ? Math.max(...temperatures) : 35;
+        const dataKey = heatmapMode === 'temp' ? 'temp' : 'humidity';
+        const values = currentPositions.map(p => p[dataKey]).filter(v => v !== undefined);
+        console.log("Values for heatmap:", values);
+        const defaultMin = dataKey === 'temp' ? 15 : 40;
+        const defaultMax = dataKey === 'temp' ? 35 : 80;
+        const minVal = values.length > 0 ? Math.min(...values) : defaultMin;
+        const maxVal = values.length > 0 ? Math.max(...values) : defaultMax;
 
         p.strokeWeight(4);
 
@@ -127,10 +129,10 @@ function MovementSketch({ positions, gotoCoords }) {
           const pos1 = currentPositions[i];
           const pos2 = currentPositions[i + 1];
 
-          const startColor = getTempColor(p, pos1.temp, minTemp, maxTemp);
-          const endColor = getTempColor(p, pos2.temp, minTemp, maxTemp);
+          const startColor = getHeatmapColor(p, pos1[dataKey], minVal, maxVal);
+          const endColor = getHeatmapColor(p, pos2[dataKey], minVal, maxVal);
 
-          const segments = 5; // Number of sub-segments for gradient
+          const segments = 5;
 
           for (let j = 0; j < segments; j++) {
             const amt1 = j / segments;
@@ -161,18 +163,14 @@ function MovementSketch({ positions, gotoCoords }) {
         // Draw target location
         p.push();
         p.noStroke();
-        p.fill(0, 0, 255, 100); // Blue with transparency
-        p.translate(
-          currentGoto.x * scaleFactor,
-          currentGoto.y * scaleFactor,
-          currentGoto.z * scaleFactor
-        );
+        p.fill(0, 0, 255, 100);
+        p.translate(currentGoto.x * scaleFactor, currentGoto.y * scaleFactor, currentGoto.z * scaleFactor);
         p.sphere(1 * scaleFactor);
         p.pop();
 
       };
     }
-  }, []);
+  }, [heatmapMode]); // Re-create the sketch if the mode changes
 
   return <ReactP5Wrapper sketch={sketch} positions={positions} gotoCoords={gotoCoords} />;
 }
@@ -217,6 +215,7 @@ function App() {
   const [positions, setPositions] = useState([]);
   const [temperature, setTemperature] = useState(0);
   const [humidity, setHumidity] = useState(0);
+  const [heatmapMode, setHeatmapMode] = useState('temp'); // 'temp' or 'humidity'
 
 
   const parsed = useMemo(() => lines.map(parseLine), [lines]);
@@ -364,12 +363,18 @@ function App() {
                   </form>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white/70 shadow-2xl p-4">
-                <h2 className="text-xl font-semibold mb-4">
-                  dt (x:{(positions[positions.length - 1]?.x - positions[positions.length - 2]?.x || 0).toFixed(2)}, 
-                  y:{(positions[positions.length - 1]?.y - positions[positions.length - 2]?.y || 0).toFixed(2)}, 
-                  z:{(positions[positions.length - 1]?.z - positions[positions.length - 2]?.z || 0).toFixed(2)})
-                </h2>
-                <MovementSketch positions={positions} gotoCoords={gotoCoords} />
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-semibold">
+                    3D Visualisation
+                  </h2>
+                  <button
+                    onClick={() => setHeatmapMode(m => m === 'temp' ? 'humidity' : 'temp')}
+                    className="rounded-md bg-slate-200 px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-300 capitalize"
+                  >
+                    Mode: {heatmapMode}
+                  </button>
+                </div>
+                <MovementSketch positions={positions} gotoCoords={gotoCoords} heatmapMode={heatmapMode} />
               </div>
           </div>
         </div>
