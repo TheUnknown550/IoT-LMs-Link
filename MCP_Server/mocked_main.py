@@ -88,10 +88,18 @@ def data_generation_loop():
     while True:
         if target_location:
             sensor_data = generate_sensor_data()
-            log_message = f"Generated Data: {json.dumps(sensor_data)}"
-            logging.info(log_message)
-            log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
+            pos = sensor_data["position"]
+            temp = sensor_data["temperature"]
+            humidity = sensor_data["humidity"]
+            
+            message = f"POSITION x={pos['x']:.2f}, y={pos['y']:.2f}, z={pos['z']:.2f} | TEMP={temp:.1f}C | HUMIDITY={humidity:.1f}% |"
+            
+            # Use a timestamp format compatible with the frontend parser
+            ts = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+            log_line = f"{ts} INFO {message}"
             LOG_DEQUE.append(log_line)
+            logging.info(message)
         time.sleep(2.5)
 
 # --- Web Server Setup ---
