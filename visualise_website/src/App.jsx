@@ -34,10 +34,20 @@ function parseLine(line) {
   };
 }
 
-function MovementSketch({ positions, gotoCoords, temperature, humidity }) {
+function MovementSketch({ positions, gotoCoords }) {
   const sketch = useMemo(() => {
+    // Helper function to map temperature to a color
+    function getTempColor(p, temp, minTemp, maxTemp) {
+      if (temp === undefined) {
+        return p.color(20, 20, 20, 200); // Default color for missing data
+      }
+      const tempMap = p.constrain(temp, minTemp, maxTemp);
+      const r = p.map(tempMap, minTemp, maxTemp, 50, 255);
+      const b = p.map(tempMap, minTemp, maxTemp, 255, 50);
+      return p.color(r, 100, b, 200);
+    }
+
     return (p) => {
-      
       let rotX = -p.PI / 6;
       let rotY = p.PI / 6;
       let zoom = 1.0;
@@ -53,7 +63,6 @@ function MovementSketch({ positions, gotoCoords, temperature, humidity }) {
 
       p.updateWithProps = (props) => {
         if (props.positions) {
-          console.log("Updating positions in sketch:", props.positions);
           currentPositions = props.positions;
         }
         if (props.gotoCoords) {
@@ -106,36 +115,47 @@ function MovementSketch({ positions, gotoCoords, temperature, humidity }) {
         p.line(0, 0, 0, 0, 0, 150);
         p.pop();
         
-        p.stroke(20, 20, 20, 200);
+        p.noFill();
+        
+        const temperatures = currentPositions.map(p => p.temp).filter(t => t !== undefined);
+        const minTemp = temperatures.length > 0 ? Math.min(...temperatures) : 15;
+        const maxTemp = temperatures.length > 0 ? Math.max(...temperatures) : 35;
+
         p.strokeWeight(4);
-        p.noFill();        // Draw temperature-colored path
+
         for (let i = 0; i < currentPositions.length - 1; i++) {
           const pos1 = currentPositions[i];
           const pos2 = currentPositions[i + 1];
 
-          // Map temperature to a color gradient (Blue for cold, Red for hot)
-          // Assuming a range of 15C to 35C for visualization
-          // Calculate min and max temperature from current positions or use state
-          const minTemp = temperature.length > 0 ? Math.min(...temperature) : 15;
-          const maxTemp = temperature.length > 0 ? Math.max(...temperature) : 35;
+          const startColor = getTempColor(p, pos1.temp, minTemp, maxTemp);
+          const endColor = getTempColor(p, pos2.temp, minTemp, maxTemp);
 
-          const tempMap = p.constrain(temperature[temperature.length - 1], minTemp, maxTemp);
-          const r = p.map(tempMap, minTemp, maxTemp, 50, 255);
-          const b = p.map(tempMap, minTemp, maxTemp, 255, 50);
-          // console.log("Drawing line with color R:", r, "B:", b, "minTemp:", minTemp, "maxTemp:", maxTemp, "currentTemp:", temperature[temperature.length - 1]);
+          const segments = 5; // Number of sub-segments for gradient
 
-          
-          p.stroke(r, 100, b, 200);
-          p.strokeWeight(3);
-          
-          p.line(
-            pos1.x * scaleFactor,
-            pos1.y * scaleFactor,
-            pos1.z * scaleFactor,
-            pos2.x * scaleFactor,
-            pos2.y * scaleFactor,
-            pos2.z * scaleFactor
-          );
+          for (let j = 0; j < segments; j++) {
+            const amt1 = j / segments;
+            const amt2 = (j + 1) / segments;
+
+            const c = p.lerpColor(startColor, endColor, amt1);
+            p.stroke(c);
+
+            const x1 = pos1.x * scaleFactor;
+            const y1 = pos1.y * scaleFactor;
+            const z1 = pos1.z * scaleFactor;
+            const x2 = pos2.x * scaleFactor;
+            const y2 = pos2.y * scaleFactor;
+            const z2 = pos2.z * scaleFactor;
+
+            const sx = p.lerp(x1, x2, amt1);
+            const sy = p.lerp(y1, y2, amt1);
+            const sz = p.lerp(z1, z2, amt1);
+
+            const ex = p.lerp(x1, x2, amt2);
+            const ey = p.lerp(y1, y2, amt2);
+            const ez = p.lerp(z1, z2, amt2);
+
+            p.line(sx, sy, sz, ex, ey, ez);
+          }
         }
 
         // Draw target location
@@ -152,7 +172,7 @@ function MovementSketch({ positions, gotoCoords, temperature, humidity }) {
 
       };
     }
-  }, [temperature]);
+  }, []);
 
   return <ReactP5Wrapper sketch={sketch} positions={positions} gotoCoords={gotoCoords} />;
 }
@@ -195,7 +215,7 @@ function App() {
 
   const [gotoCoords, setGotoCoords] = useState({ x: 0, y: 0, z: 0 });
   const [positions, setPositions] = useState([]);
-  const [temperature, setTemperature] = useState([]);
+  const [temperature, setTemperature] = useState(0);
   const [humidity, setHumidity] = useState(0);
 
 
@@ -203,43 +223,33 @@ function App() {
   
   useEffect(() => {
     const newPositions = [];
-    const temperatureValues = [];
-    const humidityValues = [];
+    const dataRegex = /POSITION x=([\d.-]+),\s*y=([\d.-]+),\s*z=([\d.-]+)\s*\|\s*TEMP=([\d.-]+)C\s*\|\s*HUMIDITY=([\d.-]+)%/;
 
-    const positionRegex = /POSITION x=([\d.-]+),\s*y=([\d.-]+),\s*z=([\d.-]+)/;
-    const temperatureRegex = /TEMP=([\d.-]+)C/;
-    const humidityRegex = /HUMIDITY=([\d.-]+)%/;
-    
     lines.forEach(line => {
       const parsedLine = parseLine(line);
-      const possitionMatch = parsedLine.message.match(positionRegex);
-      const temperatureMatch = parsedLine.message.match(temperatureRegex);
-      const humidityMatch = parsedLine.message.match(humidityRegex);
+      const match = parsedLine.message.match(dataRegex);
 
-      if (possitionMatch) {
+      if (match) {
         try {
           const pos = {
-            x: parseFloat(possitionMatch[1]),
-            y: parseFloat(possitionMatch[2]),
-            z: parseFloat(possitionMatch[3]),
+            x: parseFloat(match[1]),
+            y: parseFloat(match[2]),
+            z: parseFloat(match[3]),
+            temp: parseFloat(match[4]),
+            humidity: parseFloat(match[5]),
           };
           newPositions.push(pos);
         } catch (e) {
-          console.error("Failed to parse position data:", e);
+          console.error("Failed to parse enriched data:", e);
         }
-      }
-      if (temperatureMatch) {
-        // console.log("Parsed temperature:", temperatureMatch[1]);
-        temperatureValues.push(parseFloat(temperatureMatch[1]));
-        // console.log("Temperature values array:", temperatureValues);
-        setTemperature(temperatureValues);
-      } 
-      if (humidityMatch) {
-        humidityValues.push(parseFloat(humidityMatch[1]));
-        setHumidity(humidityValues);
       }
     });
 
+    if (newPositions.length > 0) {
+        const lastPos = newPositions[newPositions.length - 1];
+        if(lastPos.temp) setTemperature(lastPos.temp);
+        if(lastPos.humidity) setHumidity(lastPos.humidity);
+    }
     setPositions(newPositions);
   }, [lines]);
 
@@ -359,7 +369,7 @@ function App() {
                   y:{(positions[positions.length - 1]?.y - positions[positions.length - 2]?.y || 0).toFixed(2)}, 
                   z:{(positions[positions.length - 1]?.z - positions[positions.length - 2]?.z || 0).toFixed(2)})
                 </h2>
-                <MovementSketch positions={positions} gotoCoords={gotoCoords} temperature={temperature} humidity={humidity}/>
+                <MovementSketch positions={positions} gotoCoords={gotoCoords} />
               </div>
           </div>
         </div>
