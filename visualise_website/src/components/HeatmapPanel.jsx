@@ -13,7 +13,7 @@ const clampToDomain = (value) => Math.max(GRID_MIN, Math.min(GRID_MAX, value));
 const toGridIndex = (value, size) => {
     const clamped = clampToDomain(value);
     const normalised = (clamped - GRID_MIN) / GRID_RANGE;
-    const index = Math.floor(normalised * size);
+    const index = Math.round(normalised * size);
     if (Number.isNaN(index)) return 0;
     return Math.max(0, Math.min(size - 1, index));
 };
@@ -101,7 +101,7 @@ function HeatmapPanel({ positions }) {
             { ref: canvasRefs.humidityModal, grid: gridData.humGrid, min: 30, max: 90, title: "Humidity" },
         ];
 
-        panels.forEach(({ ref, grid, min, max, title }) => {
+        panels.forEach(({ ref, grid, min, max }) => {
             const canvas = ref.current;
             if (!canvas) return;
 

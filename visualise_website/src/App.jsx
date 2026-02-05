@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import MovementSketch from "./MovementSketch";
-import HeatmapPanel from "./HeatmapPanel";
+import MovementSketch from "./components/MovementSketch";
+import HeatmapPanel from "./components/HeatmapPanel";
 
 const FALLBACK_URL = "http://localhost:8100/logs?limit=300";
 
