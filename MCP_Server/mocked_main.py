@@ -46,8 +46,7 @@ def generate_sensor_data():
             "z": round(current_position["z"], 2)
         },
         "temperature": round(random.uniform(20.0, 30.0), 2),
-        "humidity": round(random.uniform(40.0, 60.0), 2),
-        "pressure": round(random.uniform(1000.0, 1020.0), 2),
+        "humidity": round(random.uniform(40.0, 60.0), 2)
     }
 
 # --- MCP Server Setup ---
