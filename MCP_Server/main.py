@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 # --- Basic Setup ---
 logger = logging.getLogger("devaiot-mcp")
 logger.setLevel(logging.DEBUG)
-PORT = 'COM7'  # Change to your COM port if different
+PORT = 'COM9'  # Change to your COM port if different
 LOG_DEQUE = deque(maxlen=300)
 
 # --- Logging Configuration ---
@@ -281,6 +281,25 @@ def get_current_position():
         pos = state.position
         return f"x={pos['x']:.2f}, y={pos['y']:.2f}, z={pos['z']:.2f}"
     return "Could not retrieve position."
+
+@ArduinoMCP.tool
+def read_logs(limit: int = 100) -> str:
+    """
+    Reads the most recent log entries from the server.
+    Useful for understanding recent events, errors, and sensor readings.
+    Returns a JSON string of log entries.
+    """
+    logs = list(LOG_DEQUE)[-limit:]
+    log_entries = []
+    for log_line in logs:
+        parts = log_line.split(" ", 2)
+        if len(parts) == 3:
+            log_entries.append({
+                "timestamp": parts[0],
+                "level": parts[1],
+                "message": parts[2]
+            })
+    return json.dumps(log_entries, indent=2) if log_entries else "[]"
 
 # --- Main Execution ---
 if __name__ == "__main__":
