@@ -35,7 +35,7 @@ def generate_sensor_data():
                 elif current_position[axis] > target_location[axis]:
                     current_position[axis] -= 1
             # Add some random jitter
-            current_position[axis] += random.uniform(-0.5, 0.5)
+            # current_position[axis] += random.uniform(-0.5, 0.5)
 
 
     return {
@@ -56,15 +56,15 @@ MockedArduinoMCP = FastMCP('Mocked Arduino Server')
 
 
 def goto_target(x: float, y: float, z: float):
-    """Sets the target coordinates for the mocked device and resets the current position."""
-    global target_location, current_position
+    """Sets the target coordinates for the mocked device."""
+    global target_location
     target_location = {"x": x, "y": y, "z": z}
-    current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
-    log_message = f"GOTO target set to: x={x}, y={y}, z={z}. Position reset to origin."
+    # current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
+    log_message = f"GOTO target set to: x={x}, y={y}, z={z}."
     logging.info(log_message)
     log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
     LOG_DEQUE.append(log_line)
-    return f"GOTO target set to: x={x}, y={y}, z={z}. Position reset."
+    return f"GOTO target set to: x={x}, y={y}, z={z}."
 
 @MockedArduinoMCP.tool
 def get_sensor_data():
@@ -128,14 +128,14 @@ def handle_goto_target(coords: GotoCoords):
     """API endpoint to set the target coordinates for the mocked device."""
     # This manually implements the logic of the goto_target tool
     # to ensure the endpoint works, bypassing the fastmcp http layer.
-    global target_location, current_position
+    global target_location
     target_location = {"x": coords.x, "y": coords.y, "z": coords.z}
-    current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
-    log_message = f"GOTO target set to: x={coords.x}, y={coords.y}, z={coords.z}. Position reset to origin."
+    # current_position = {"x": 0.0, "y": 0.0, "z": 0.0}
+    log_message = f"GOTO target set to: x={coords.x}, y={coords.y}, z={coords.z}."
     logging.info(log_message)
     log_line = f"{datetime.now(timezone.utc).isoformat()}Z INFO {log_message}"
     LOG_DEQUE.append(log_line)
-    return f"GOTO target set to: x={coords.x}, y={coords.y}, z={coords.z}. Position reset."
+    return f"GOTO target set to: x={coords.x}, y={coords.y}, z={coords.z}."
 
 # Mount the MCP server as a sub-application
 # mcp_app = MockedArduinoMCP.http_app()
