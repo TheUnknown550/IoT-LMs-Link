@@ -26,9 +26,15 @@ LOG_DEQUE = deque(maxlen=300)
 # --- Logging Configuration ---
 def configure_logging() -> None:
     formatter = logging.Formatter("%(asctime)sZ %(levelname)s %(message)s")
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    
+    # Configure file logging
+    log_file = Path(__file__).parent / "mcp_server.log"
+    file_handler = RotatingFileHandler(log_file, maxBytes=1024*1024*5, backupCount=2) # 5MB per file, 2 backups
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Silence other loggers
+    logging.getLogger("fastmcp").setLevel(logging.WARNING)
 
 configure_logging()
 
@@ -283,14 +289,15 @@ def get_current_position():
     return "Could not retrieve position."
 
 @ArduinoMCP.tool
-def read_logs(limit: int = 100) -> str:
+def read_logs(limit: int = 100) -> list: # Change return type hint to list
     """
     Reads the most recent log entries from the server.
     Useful for understanding recent events, errors, and sensor readings.
-    Returns a JSON string of log entries.
     """
+    # Get the slice of logs
     logs = list(LOG_DEQUE)[-limit:]
     log_entries = []
+    
     for log_line in logs:
         parts = log_line.split(" ", 2)
         if len(parts) == 3:
@@ -299,14 +306,23 @@ def read_logs(limit: int = 100) -> str:
                 "level": parts[1],
                 "message": parts[2]
             })
-    return json.dumps(log_entries, indent=2) if log_entries else "[]"
+        else:
+            # Fallback for lines that don't match the format 
+            # so the LLM doesn't miss "Raw" errors
+            log_entries.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "level": "RAW",
+                "message": log_line
+            })
+            
+    return log_entries # FastMCP will convert this to JSON for you
 
 # --- Main Execution ---
 if __name__ == "__main__":
     uvicorn_thread = threading.Thread(
         target=uvicorn.run,
         args=(app,),
-        kwargs={"host": "0.0.0.0", "port": 8100},
+        kwargs={"host": "0.0.0.0", "port": 8100, "log_level": "warning"},
         daemon=True,
     )
     uvicorn_thread.start()
